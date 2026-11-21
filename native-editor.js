@@ -132,7 +132,52 @@ function renderOriginalTemplate(sheet){sheet.querySelectorAll('.native-original-
 function sheetSelection(n){$('nativeSheet').querySelectorAll('.cs37-template').forEach(el=>el.classList.toggle('cs37-selected',el===n))}
 function templateDown(ev,e,n){if(ev.button!==0||n.isContentEditable)return;selectedTemplate=e.id;selected=-1;const x=ev.clientX,y=ev.clientY,orig={...e},scale=$('nativeSheet').getBoundingClientRect().width/840,rect=n.getBoundingClientRect(),resize=ev.clientX>rect.right-18*scale&&ev.clientY>rect.bottom-18*scale;sheetSelection(n);let moved=false;n.onpointermove=mv=>{if(Math.abs(mv.clientX-x)+Math.abs(mv.clientY-y)>4&&!moved){checkpoint();moved=true}let dx=(mv.clientX-x)/scale,dy=(mv.clientY-y)/scale;if(resize){e.w=Math.max(40,Math.min(840-e.x,Math.round(orig.w+dx)));e.h=Math.max(25,Math.min(594-e.y,Math.round(orig.h+dy)))}else{e.x=Math.max(0,Math.min(840-e.w,Math.round(orig.x+dx)));e.y=Math.max(0,Math.min(594-e.h,Math.round(orig.y+dy)))}Object.assign(n.style,{left:e.x+'px',top:e.y+'px',width:e.w+'px',height:e.h+'px'})};n.onpointerup=()=>{n.onpointermove=null;n.onpointerup=null;if(moved){change()}sheetSelection(n);properties()};properties()}
 function templateProperties(target){let items=templateItems(),e=items.find(x=>x.id===selectedTemplate);target.innerHTML='<div class="native-panelhint">Originalvorlage 2.4 / Layout 1.8 · Alle Elemente sind verschiebbar und skalierbar.</div><button id="cs37AddTemplate" class="native-tool">＋ Textfeld hinzufügen</button>'+(e?`<div class="native-feedback-banner">${esc(e.id)} ausgewählt</div>${e.kind==='text'?`<label>Text<textarea id="cs37Text" rows="5">${esc(templateText(e))}</textarea></label><label>Schriftart<select id="cs37Family"><option>Arial</option><option>Helvetica</option><option>Georgia</option><option>Times New Roman</option><option>Verdana</option></select></label><label>Schriftgröße<input type="number" id="cs37Size" value="${e.size||14}"></label><label>Textfarbe<input type="color" id="cs37Color" value="${e.color||'#242824'}"></label><button id="cs37Italic" class="native-tool">Kursiv ${e.italic?'✓':''}</button><button id="cs37Bold" class="native-tool">Fett ${e.bold?'✓':''}</button><button id="cs37Align" class="native-tool">Ausrichtung: ${esc(e.align||'left')}</button>`:''}<button id="cs37Delete" class="native-tool danger">Element entfernen</button>`:'<div class="native-panelhint">Element anklicken oder doppelklicken, um es zu bearbeiten.</div>');$('cs37AddTemplate').onclick=()=>{checkpoint();let item={id:'custom'+id(),kind:'text',x:120,y:200,w:340,h:75,size:16,customText:'Neuer Text'};items.push(item);selectedTemplate=item.id;render();change()};if(!e)return;const bind=(k,fn)=>{let n=$(k);if(n)n.onchange=fn};bind('cs37Text',v=>{checkpoint();e.customText=v.target.value;render();change()});if($('cs37Family'))$('cs37Family').value=e.fontFamily||'Arial';bind('cs37Family',v=>{checkpoint();e.fontFamily=v.target.value;const el=$('nativeSheet').querySelector(`[data-template="${e.id}"]`);if(el)el.style.fontFamily=e.fontFamily;change()});$('cs37Italic').onclick=()=>{checkpoint();e.italic=!e.italic;render();change()};if($('cs37Size'))$('cs37Size').oninput=v=>{const n=Number(v.target.value);if(n>=8&&n<=200){e.size=n;const el=$('nativeSheet').querySelector(`[data-template="${e.id}"]`);if(el)el.style.fontSize=n+'px';change()}};if($('cs37Color'))$('cs37Color').oninput=v=>{e.color=v.target.value;const n=$('nativeSheet').querySelector(`[data-template="${e.id}"]`);if(n)n.style.color=e.color;change()};bind('cs37Color',v=>{checkpoint();e.color=v.target.value;render();change()});$('cs37Bold').onclick=()=>{checkpoint();e.bold=!e.bold;render();change()};$('cs37Align').onclick=()=>{checkpoint();e.align=e.align==='left'?'center':e.align==='center'?'right':'left';render();change()};$('cs37Delete').onclick=()=>{checkpoint();snap().templateLayouts18[templateKey()]=items.filter(x=>x.id!==e.id);selectedTemplate=null;render();change()}}
-async function renderedPages(){const saved={active,roomId,selected,selectedTemplate},out=[];for(const p of pages()){active=p.id;if(active.startsWith('room:')){roomId=active.split(':')[1];room().activePageId=active.split(':')[2]}selected=-1;selectedTemplate=null;render();await Promise.all([renderFloorImages($('nativeSheet')),resolveImages($('nativeSheet'))]);await Promise.all([...$('nativeSheet').querySelectorAll('img')].map(im=>im.complete?Promise.resolve():new Promise(done=>{im.addEventListener('load',done,{once:true});im.addEventListener('error',done,{once:true});setTimeout(done,3500)})));const node=$('nativeSheet').cloneNode(true);node.style.transform='none';node.removeAttribute('id');node.querySelectorAll('.cs37-selected,.selected').forEach(n=>n.classList.remove('cs37-selected','selected'));out.push(node)}Object.assign(window,{/* no globals changed */});active=saved.active;roomId=saved.roomId;selected=saved.selected;selectedTemplate=saved.selectedTemplate;render();return out}
+// Export-only floor normalization. Both the floor image and room polygons are
+// painted in the SAME 1200x680 drawing coordinates before whitespace is trimmed.
+// This avoids tiny floor plans inside a mostly blank exported slide.
+async function normalizeExportFloors(sheet){
+ for(const floor of sheet.querySelectorAll('[data-floor]')){
+  const stage=floor.querySelector('.cs50-floor-stage');
+  const image=stage?.querySelector('img');
+  if(!stage||!image||!image.naturalWidth||!image.naturalHeight)continue;
+  try{
+   const sourceW=1200,sourceH=680;
+   const c=document.createElement('canvas');c.width=sourceW;c.height=sourceH;
+   const ctx=c.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,0,sourceW,sourceH);
+   const scale=Math.min(sourceW/image.naturalWidth,sourceH/image.naturalHeight);
+   const iw=image.naturalWidth*scale,ih=image.naturalHeight*scale;
+   ctx.drawImage(image,(sourceW-iw)/2,(sourceH-ih)/2,iw,ih);
+   const overlay=stage.querySelector('svg');
+   if(overlay){
+    const vb=overlay.viewBox.baseVal,rx=sourceW/(vb.width||sourceW),ry=sourceH/(vb.height||sourceH);
+    for(const poly of overlay.querySelectorAll('polygon')){
+     const pts=[...poly.points];if(pts.length<3)continue;
+     ctx.beginPath();pts.forEach((pt,i)=>i?ctx.lineTo(pt.x*rx,pt.y*ry):ctx.moveTo(pt.x*rx,pt.y*ry));ctx.closePath();
+     ctx.globalAlpha=.32;ctx.fillStyle=poly.getAttribute('fill')||'#c6a77d';ctx.fill();ctx.globalAlpha=1;
+     ctx.lineWidth=3;ctx.strokeStyle=poly.getAttribute('stroke')||'#c6a77d';ctx.stroke();
+    }
+   }
+   const pixels=ctx.getImageData(0,0,sourceW,sourceH).data;
+   let left=sourceW,top=sourceH,right=-1,bottom=-1;
+   // Detect meaningful ink, ignoring almost-white paper and JPEG artifacts.
+   for(let y=0;y<sourceH;y+=2)for(let x=0;x<sourceW;x+=2){const i=(y*sourceW+x)*4;
+    if(Math.min(pixels[i],pixels[i+1],pixels[i+2])<185){left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y)}
+   }
+   if(right<0)continue;
+   const pad=Math.max(12,Math.round(Math.max(right-left,bottom-top)*.035));
+   left=Math.max(0,left-pad);top=Math.max(0,top-pad);right=Math.min(sourceW,right+pad);bottom=Math.min(sourceH,bottom+pad);
+   // Never magnify a tiny annotation or crop away most of a meaningful drawing.
+   const cw=Math.max(1,right-left),ch=Math.max(1,bottom-top);
+   if(cw<sourceW*.10||ch<sourceH*.10)continue;
+   const out=document.createElement('canvas');out.width=cw;out.height=ch;
+   out.getContext('2d').drawImage(c,left,top,cw,ch,0,0,cw,ch);
+   const result=document.createElement('img');result.src=out.toDataURL('image/png');result.alt='Grundriss mit Raumkonturen';
+   result.style.cssText='display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:contain';
+   floor.replaceChildren(result);
+  }catch(err){console.warn('Grundriss-Export: unveränderte Darstellung als Rückfall',err)}
+ }
+}
+async function renderedPages(){const saved={active,roomId,selected,selectedTemplate},out=[];for(const p of pages()){active=p.id;if(active.startsWith('room:')){roomId=active.split(':')[1];room().activePageId=active.split(':')[2]}selected=-1;selectedTemplate=null;render();await Promise.all([renderFloorImages($('nativeSheet')),resolveImages($('nativeSheet'))]);await Promise.all([...$('nativeSheet').querySelectorAll('img')].map(im=>im.complete?Promise.resolve():new Promise(done=>{im.addEventListener('load',done,{once:true});im.addEventListener('error',done,{once:true});setTimeout(done,3500)})));const node=$('nativeSheet').cloneNode(true);await normalizeExportFloors(node);node.style.transform='none';node.removeAttribute('id');node.querySelectorAll('.cs37-selected,.selected').forEach(n=>n.classList.remove('cs37-selected','selected'));out.push(node)}Object.assign(window,{/* no globals changed */});active=saved.active;roomId=saved.roomId;selected=saved.selected;selectedTemplate=saved.selectedTemplate;render();return out}
 function exportCSS(){return [...document.styleSheets].filter(s=>{try{return !!s.cssRules}catch{return false}}).flatMap(s=>[...s.cssRules].map(r=>r.cssText)).join('\n')}
 async function pageCanvases(){
  if(!window.html2canvas)throw Error('html2canvas konnte nicht geladen werden. Bitte Browsercache aktualisieren.');
