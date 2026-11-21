@@ -1,0 +1,7 @@
+// The embedded legacy editor stays the owner of its own cloud state.
+(()=>{'use strict';const query=new URLSearchParams(location.search);if(query.get('embedded')!=='1')return;const target=query.get('project');
+const css=document.createElement('style');css.textContent=`.top, .sidebar, #navDash, #navWork, #navEdit{display:none!important} body{padding-top:0!important} #cloudBar12{position:sticky!important;bottom:0!important} #dashboard{display:none!important}`;document.head.append(css);
+let tries=0;const timer=setInterval(()=>{tries++;try{if(window.conceptCloud?.ready&&typeof db!=='undefined'&&db?.projects?.length){clearInterval(timer);open(target)}}catch(e){console.warn('Bridge waiting',e)}if(tries>160){clearInterval(timer);parent.postMessage({type:'CS3_EDITOR_ERROR',message:'Editor konnte nicht vollständig initialisiert werden.'},location.origin)}},250);
+function open(id){const p=db.projects.find(p=>p.id===id);if(!p){parent.postMessage({type:'CS3_EDITOR_ERROR',message:'Projekt in der bisherigen Datenstruktur nicht gefunden.'},location.origin);return}db.current=p.id;try{roomId=null;page='concept';selected=-1;go('editor');renderEditor();parent.postMessage({type:'CS3_EDITOR_READY',id},location.origin)}catch(e){parent.postMessage({type:'CS3_EDITOR_ERROR',message:e.message},location.origin)}}
+window.addEventListener('message',e=>{if(e.origin!==location.origin)return;if(e.data?.type==='CS3_OPEN_PROJECT'&&e.data.id)open(e.data.id)});
+})();
