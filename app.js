@@ -7,15 +7,19 @@ const canvas=$('planCanvas'),ctx=canvas.getContext('2d');$('floorZoom').oninput=
 const status=msg=>{$('saveStatus').textContent=msg};
 async function loadFloors(){if(!S.active)return;const id=S.active.id;
  const [fr,rr]=await Promise.all([S.client.from('cs_floors').select('*').eq('project_id',id).order('sort_order'),S.client.from('cs_rooms').select('*').eq('project_id',id).order('sort_order')]);
- if(fr.error)throw fr.error;if(rr.error)throw rr.error;if(S.active?.id!==id)return;
- S.floors=fr.data||[];S.floorRooms=rr.data||[];$('floorSelect').innerHTML='<option value="">Neue Etage</option>'+S.floors.map(f=>`<option value="${safe(f.id)}">${safe(f.name)}</option>`).join('');
+ if(S.active?.id!==id)return;
+ const snapshot=S.active.settings?.app_snapshot||{};
+ const dbFloors=fr.error?[]:(fr.data||[]),dbRooms=rr.error?[]:(rr.data||[]);
+ const merged=(db,local)=>[...new Map([...(local||[]),...db].filter(x=>x?.id).map(x=>[String(x.id),x])).values()];
+ S.floors=merged(dbFloors,snapshot.floors);S.floorRooms=merged(dbRooms,snapshot.rooms.filter?.(r=>r.floorId||r.floor_id)||[]);
+ if(fr.error||rr.error)status('Hinweis: Grundrisstabellen nicht zugänglich. Projekt-Snapshot wird verwendet. '+[fr.error?.message,rr.error?.message].filter(Boolean).join('; '));$('floorSelect').innerHTML='<option value="">Neue Etage</option>'+S.floors.map(f=>`<option value="${safe(f.id)}">${safe(f.name)}</option>`).join('');
  S.floorId=null;S.shapes=[];S.points=[];S.curves=[];S.image=null;S.imageFile=null;S.sourcePath=null;S.pdfDoc=null;S.pdfFile=null;renderCanvas();status('Projekt geladen. Etage auswählen oder neuen Grundriss laden.');
 }
 async function showFloor(id){S.floorId=id||null;S.shapes=[];S.points=[];S.curves=[];S.image=null;S.imageFile=null;S.pdfDoc=null;S.pdfFile=null;const floor=S.floors.find(f=>f.id===id);
  $('floorName').value=floor?.name||'';S.sourcePath=floor?.plan_storage_path||null;
  if(floor){const w=Number(floor.drawing_width_px)||1200,h=Number(floor.drawing_height_px)||680;
  S.shapes=S.floorRooms.filter(r=>r.floor_id===id).map(r=>({id:r.id,name:r.name,color:r.color||colors[S.shapes.length%colors.length],widthM:r.width_m||0,lengthM:r.length_m||0,points:(Array.isArray(r.polygon)?r.polygon:[]).map(p=>({x:Number(p.x)*1200/w,y:Number(p.y)*680/h}))}));
- if(floor.plan_storage_path){const {data,error:e}=await S.client.storage.from('cs-floorplans').createSignedUrl(floor.plan_storage_path,3600);if(e)status('Grundrissdatei konnte nicht geladen werden: '+e.message);else await loadImage(data.signedUrl)} }
+ if(floor.plan_storage_path){const {data,error:e}=await S.client.storage.from('cs-floorplans').createSignedUrl(floor.plan_storage_path,3600);if(e)status('Grundrissdatei konnte nicht geladen werden: '+e.message);else await loadImage(data.signedUrl)}else if(floor.imageData||floor.dataUrl||floor.image){await loadImage(floor.imageData||floor.dataUrl||floor.image)} }
  S.shapes.forEach(sh=>{const m=project().v42_room_measurements?.[sh.id];if(m)Object.assign(sh,m)});renderCanvas();}
 $('floorSelect').onchange=()=>showFloor($('floorSelect').value).catch(error);
 async function loadImage(url){return new Promise((resolve,reject)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>{S.image=im;renderCanvas();resolve()};im.onerror=()=>reject(Error('Grundrissbild konnte nicht geöffnet werden.'));im.src=url})}
@@ -25,23 +29,37 @@ $('pdfPage').onchange=()=>{const n=Number($('pdfPage').value);if(S.pdfDoc&&n>=1&
 $('planFile').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{S.sourcePath=null;S.imageFile=null;S.pdfDoc=null;S.pdfFile=null;
  if(f.type==='application/pdf'||f.name.toLowerCase().endsWith('.pdf')){if(!window.pdfjsLib)throw Error('PDF.js konnte nicht geladen werden. Bitte Internetverbindung prüfen.');window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';S.pdfDoc=await window.pdfjsLib.getDocument({data:await f.arrayBuffer()}).promise;S.pdfFile=f;$('pdfPage').max=S.pdfDoc.numPages;$('pdfPage').value=1;await rasterPdf(1)}
  else{S.imageFile=f;await loadImage(URL.createObjectURL(f));status('Bild geladen. Raumkonturen einzeichnen und speichern.')} }catch(err){error(err);status('Import fehlgeschlagen: '+err.message)}};
-$('saveFloor').onclick=async()=>{if(!S.active)return;const btn=$('saveFloor');btn.disabled=true;try{
- const projectId=S.active.id;const name=$('floorName').value.trim()||'Grundriss '+(S.floors.length+1);let path=S.sourcePath;
- if(S.imageFile){const ext=S.imageFile.type==='image/png'?'png':S.imageFile.type==='image/webp'?'webp':'jpg';path=`${projectId}/${crypto.randomUUID()}.${ext}`;const {error:e}=await S.client.storage.from('cs-floorplans').upload(path,S.imageFile,{contentType:S.imageFile.type,upsert:false});if(e)throw e}
- let floorId=S.floorId;const values={name,plan_storage_path:path,plan_mime_type:S.imageFile?.type||(S.floors.find(f=>f.id===floorId)?.plan_mime_type)||null,drawing_width_px:1200,drawing_height_px:680};
- if(floorId){const {error:e}=await S.client.from('cs_floors').update(values).eq('id',floorId).eq('project_id',projectId);if(e)throw e}
- else{const {data,error:e}=await S.client.from('cs_floors').insert({...values,project_id:projectId,sort_order:S.floors.length}).select('id').single();if(e)throw e;floorId=data.id;S.floorId=floorId}
- for(let i=0;i<S.shapes.length;i++){const sh=S.shapes[i],row={project_id:projectId,floor_id:floorId,name:sh.name||`Raum ${i+1}`,polygon:sh.points.map(p=>({x:p.x,y:p.y})),sort_order:i};let result;
- if(sh.id)result=await S.client.from('cs_rooms').update(row).eq('id',sh.id).eq('project_id',projectId);else result=await S.client.from('cs_rooms').insert(row).select('id').single();if(result.error)throw result.error;if(!sh.id)sh.id=result.data.id}
- S.sourcePath=path;await saveFloorMeasurements(projectId,floorId);status('Grundriss und '+S.shapes.length+' Räume gespeichert.');await loadFloors();$('floorSelect').value=floorId;await showFloor(floorId);
- }catch(e){error(e);status('Speichern fehlgeschlagen: '+e.message+' – vorhandene Daten nicht löschen.')}finally{btn.disabled=false}};
+$('saveFloor').onclick=async()=>{if(!S.active)return;const btn=$('saveFloor');btn.disabled=true;
+ try{
+ const projectId=S.active.id,name=$('floorName').value.trim()||'Grundriss '+(S.floors.length+1);
+ let path=S.sourcePath,inlineImage=null,tableWarning='';
+ if(S.imageFile){const ext=S.imageFile.type==='image/png'?'png':S.imageFile.type==='image/webp'?'webp':'jpg';const nextPath=`${projectId}/${crypto.randomUUID()}.${ext}`;
+ const {error:uploadError}=await S.client.storage.from('cs-floorplans').upload(nextPath,S.imageFile,{contentType:S.imageFile.type,upsert:false});
+ if(uploadError){if(S.imageFile.size>1800000)throw Error('Storage-Upload fehlgeschlagen ('+uploadError.message+'). Die Datei ist für die Snapshot-Ersatzspeicherung zu groß. Bitte Supabase Storage-Richtlinien prüfen.');
+ inlineImage=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(S.imageFile)});tableWarning='Storage nicht beschreibbar: Bild im Projektsnapshot gesichert. ';}
+ else path=nextPath;
+ }
+ let floorId=S.floorId||crypto.randomUUID();const values={name,plan_storage_path:path||null,plan_mime_type:S.imageFile?.type||(S.floors.find(f=>String(f.id)===String(floorId))?.plan_mime_type)||null,drawing_width_px:1200,drawing_height_px:680};
+ let floorResult;
+ if(S.floorId&&S.floors.some(f=>String(f.id)===String(floorId)))floorResult=await S.client.from('cs_floors').update(values).eq('id',floorId).eq('project_id',projectId);
+ else floorResult=await S.client.from('cs_floors').insert({...values,id:floorId,project_id:projectId,sort_order:S.floors.length});
+ if(floorResult.error)tableWarning+='Etage in cs_floors nicht geschrieben: '+floorResult.error.message+'. ';
+ for(let i=0;i<S.shapes.length;i++){const sh=S.shapes[i];sh.id||=crypto.randomUUID();const row={project_id:projectId,floor_id:floorId,name:sh.name||`Raum ${i+1}`,polygon:sh.points.map(p=>({x:p.x,y:p.y})),sort_order:i,area_m2:sh.widthM&&sh.lengthM?sh.widthM*sh.lengthM:null};
+ const result=sh._persisted?await S.client.from('cs_rooms').update(row).eq('id',sh.id).eq('project_id',projectId):await S.client.from('cs_rooms').insert({...row,id:sh.id});
+ if(result.error)tableWarning+='Raum '+sh.name+': '+result.error.message+'. ';else sh._persisted=true;
+ }
+ S.floorId=floorId;S.sourcePath=path;
+ await saveFloorMeasurements(projectId,floorId,inlineImage);
+ status('Gespeichert: '+S.shapes.length+' Räume und Grundriss im Projektsnapshot. '+tableWarning);
+ await loadFloors();$('floorSelect').value=floorId;await showFloor(floorId);
+ }catch(e){error(e);status('Speichern fehlgeschlagen: '+e.message+' – Zeichnung bleibt bis zum Neuladen sichtbar.')}finally{btn.disabled=false}};
 
 
-async function saveFloorMeasurements(projectId,floorId){const p=S.active;const settings=structuredClone(p.settings||{});const snap=settings.app_snapshot||{};snap.floors=Array.isArray(snap.floors)?snap.floors:[];snap.rooms=Array.isArray(snap.rooms)?snap.rooms:[];
- const existingFloor=snap.floors.find(f=>String(f.id)===String(floorId));const floorRow={id:floorId,name:document.getElementById('floorName').value.trim()||'Etage',plan_storage_path:S.sourcePath||S.floors.find(f=>String(f.id)===String(floorId))?.plan_storage_path||null,bucket:'cs-floorplans',drawing_width_px:1200,drawing_height_px:680};
+async function saveFloorMeasurements(projectId,floorId,inlineImage=null){const p=S.active;const settings=structuredClone(p.settings||{});const snap=settings.app_snapshot||{};snap.floors=Array.isArray(snap.floors)?snap.floors:[];snap.rooms=Array.isArray(snap.rooms)?snap.rooms:[];
+ const existingFloor=snap.floors.find(f=>String(f.id)===String(floorId));const floorRow={id:floorId,name:document.getElementById('floorName').value.trim()||'Etage',plan_storage_path:S.sourcePath||S.floors.find(f=>String(f.id)===String(floorId))?.plan_storage_path||null,bucket:'cs-floorplans',drawing_width_px:1200,drawing_height_px:680};if(inlineImage)floorRow.imageData=inlineImage;
  if(existingFloor)Object.assign(existingFloor,floorRow);else snap.floors.push(floorRow);
  for(const sh of S.shapes){if(!sh.id)continue;let r=snap.rooms.find(x=>String(x.id)===String(sh.id));if(!r)r=snap.rooms.find(x=>x.name===sh.name&&String(x.floorId||x.floor_id||'')===String(floorId));const geometry={floorId,floor_id:floorId,polygon:sh.points.map(p=>({x:p.x,y:p.y})),color:sh.color||'#e2aa6e',widthM:sh.widthM||0,lengthM:sh.lengthM||0};if(r){Object.assign(r,geometry);r.name=sh.name||r.name;}else snap.rooms.push({id:sh.id,name:sh.name||'Raum',notes:'',variants:[],...geometry});}
- snap.v42_room_measurements=snap.v42_room_measurements||{};for(const sh of S.shapes){if(sh.id)snap.v42_room_measurements[sh.id]={widthM:sh.widthM||0,lengthM:sh.lengthM||0,color:sh.color||'#e2aa6e',floorId};}settings.app_snapshot=snap;const {error:e}=await S.client.from('cs_projects').update({settings}).eq('id',projectId);if(e)throw e;p.settings=settings;}
+ snap.v42_room_measurements=snap.v42_room_measurements||{};for(const sh of S.shapes){if(sh.id)snap.v42_room_measurements[sh.id]={widthM:sh.widthM||0,lengthM:sh.lengthM||0,color:sh.color||'#e2aa6e',floorId};}settings.app_snapshot=snap;const {error:e}=await S.client.from('cs_projects').update({settings}).eq('id',projectId);if(e)throw e;p.settings=settings;const saved=S.projects.find(x=>String(x.id)===String(projectId));if(saved)saved.settings=settings;}
 // V3 project state: preserve app_snapshot so the existing editor continues to read it.
 const phaseIndex={briefing:0,floorplans:1,concept:2,presentation:3,feedback:4,approval:5,technical:6};
 async function persistProject(p,changes={}){const prev=JSON.parse(JSON.stringify(p));const settings=structuredClone(p.settings||{});const snap=settings.app_snapshot||{id:p.id,name:p.name,client:p.client_name||'',brief:p.description||'',floors:[],rooms:[],stage:0,step:0};if(changes.phase){snap.stage=phaseIndex[changes.phase]??snap.stage;snap.step=Math.min(6,snap.stage)}if(changes.name)snap.name=changes.name;if(changes.client_name!==undefined)snap.client=changes.client_name;if(changes.description!==undefined)snap.brief=changes.description;settings.app_snapshot=snap;Object.assign(p,changes,{settings});renderList();try{const {error:e}=await S.client.from('cs_projects').update({...changes,settings}).eq('id',p.id);if(e)throw e;return true}catch(e){Object.assign(p,prev);renderList();error(e);alert('Speichern fehlgeschlagen: '+e.message);return false}}
