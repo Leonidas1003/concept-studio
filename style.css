@@ -22,3 +22,6 @@
 .cs37-template{cursor:move;overflow-wrap:anywhere;padding:2px 4px}.cs37-template.cs37-selected{outline:2px solid #c5a476;outline-offset:2px}.cs37-template.cs37-selected:after{content:'';position:absolute;right:0;bottom:0;width:11px;height:11px;background:#c5a476}.cs37-floor{padding:0;background:#fff}.cs37-floor img{width:100%;height:100%;object-fit:contain}.native-properties textarea{width:100%;min-height:110px;resize:vertical}.presentation-readonly .cs37-template{cursor:default}.presentation-readonly .cs37-template:after{display:none}
 
 .cs37-template.cs37-selected{outline:2px solid #c5a476!important;outline-offset:2px!important}.cs37-template[contenteditable=true]{cursor:text!important;outline:2px solid #c5a476!important;white-space:pre-wrap!important;user-select:text!important}
+
+/* 3.9: Raumgrundriss und Auswahl */
+.native-room-floor{z-index:3;pointer-events:none}.native-room-floor .native-floor-overlay{z-index:2}.native-element img{display:block;width:100%;height:100%;object-fit:cover}.native-original-logo,.native-original-copyright,.native-original-number{pointer-events:none}.native-sheet{cursor:default}.cs37-template[contenteditable=true]{outline:2px solid #c2a77d;cursor:text!important;overflow:auto!important}.native-floor-overlay polygon{vector-effect:non-scaling-stroke}
